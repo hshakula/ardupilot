@@ -1909,19 +1909,6 @@ GCS_MAVLINK::update_receive(uint32_t max_time_us)
 
     const uint32_t tnow = AP_HAL::millis();
 
-    // send a timesync message every 10 seconds; this is for data
-    // collection purposes
-#if HAL_HIGH_LATENCY2_ENABLED
-    if (tnow - _timesync_request.last_sent_ms > _timesync_request.interval_ms && !is_private() && !is_high_latency_link) {
-#else
-    if (tnow - _timesync_request.last_sent_ms > _timesync_request.interval_ms && !is_private()) {
-#endif
-        if (HAVE_PAYLOAD_SPACE(chan, TIMESYNC)) {
-            send_timesync();
-            _timesync_request.last_sent_ms = tnow;
-        }
-    }
-
 #if HAL_LOGGING_ENABLED
     // consider logging mavlink stats:
     if (is_active() || is_streaming()) {
@@ -3597,13 +3584,6 @@ uint64_t GCS_MAVLINK::timesync_receive_timestamp_ns() const
     return ret*1000LL;
 }
 
-uint64_t GCS_MAVLINK::timesync_timestamp_ns() const
-{
-    // we add in our own system id try to ensure we only consider
-    // responses to our own timesync request messages
-    return AP_HAL::micros64()*1000LL + mavlink_system.sysid;
-}
-
 /*
   return a timesync request
   Sends back ts1 as received, and tc1 is the local timestamp in usec
@@ -3615,35 +3595,7 @@ void GCS_MAVLINK::handle_timesync(const mavlink_message_t &msg)
     mavlink_msg_timesync_decode(&msg, &tsync);
 
     if (tsync.tc1 != 0) {
-        // this is a response to a timesync request
-        if (tsync.ts1 != _timesync_request.sent_ts1) {
-            // we didn't actually send the request.... or it's a
-            // response to an ancient request...
-            return;
-        }
-#if 0
-        GCS_SEND_TEXT(MAV_SEVERITY_INFO,
-                        "timesync response sysid=%u (latency=%fms)",
-                        msg.sysid,
-                        round_trip_time_us*0.001f);
-#endif
-
-#if HAL_LOGGING_ENABLED
-        const uint64_t round_trip_time_us = (timesync_receive_timestamp_ns() - _timesync_request.sent_ts1)*0.001f;
-        AP_Logger *logger = AP_Logger::get_singleton();
-        if (logger != nullptr) {
-            AP::logger().Write(
-                "TSYN",
-                "TimeUS,SysID,RTT",
-                "s-s",
-                "F-F",
-                "QBQ",
-                AP_HAL::micros64(),
-                msg.sysid,
-                round_trip_time_us
-                );
-        }
-#endif  // HAL_LOGGING_ENABLED
+        // this is a response to a timesync request that we did not send
         return;
     }
 
@@ -3663,20 +3615,9 @@ void GCS_MAVLINK::handle_timesync(const mavlink_message_t &msg)
     mavlink_msg_timesync_send(
         chan,
         rsync.tc1,
-        rsync.ts1
-        );
-}
-
-/*
- * broadcast a timesync message.  We may get multiple responses to this request.
- */
-void GCS_MAVLINK::send_timesync()
-{
-    _timesync_request.sent_ts1 = timesync_timestamp_ns();
-    mavlink_msg_timesync_send(
-        chan,
-        0,
-        _timesync_request.sent_ts1
+        rsync.ts1,
+        msg.sysid,
+        msg.compid
         );
 }
 
